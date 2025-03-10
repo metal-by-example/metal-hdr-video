@@ -5,7 +5,7 @@ struct VideoApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .ignoresSafeArea()
+                .frame(minWidth: 300, minHeight: 168)
         }
     }
 }

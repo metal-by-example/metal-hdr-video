@@ -2,6 +2,7 @@ import SwiftUI
 import AVKit
 
 struct ContentView: View {
+    @StateObject private var model = MediaPlaybackModel()
     @State private var videoRenderer: VideoRenderer
 
     init() {
@@ -11,11 +12,19 @@ struct ContentView: View {
 
     var body: some View {
         MetalView(delegate: videoRenderer)
+            .ignoresSafeArea()
             .onAppear {
-                videoRenderer.play()
+                videoRenderer.prepareToPlay { playerItem in
+                    model.setCurrentItem(playerItem)
+                }
             }
             .onDisappear {
-                videoRenderer.stop()
+                model.player.pause()
+            }
+            .overlay(alignment: .init(horizontal: .center, vertical: .bottom)) {
+                TransportControlsView(model)
+                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16.0))
+                    .padding()
             }
     }
 }

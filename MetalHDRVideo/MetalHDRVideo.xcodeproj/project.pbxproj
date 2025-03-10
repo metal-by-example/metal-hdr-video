@@ -15,6 +15,8 @@
 		835C5D162D77B668008C1BE6 /* Shaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = 835C5D062D77B668008C1BE6 /* Shaders.metal */; };
 		835C5D172D77B668008C1BE6 /* VideoRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 835C5D072D77B668008C1BE6 /* VideoRenderer.swift */; };
 		83B9C3E92D7E7F0800B43B90 /* Oakland.mov in Resources */ = {isa = PBXBuildFile; fileRef = 83B9C3E82D7E7F0800B43B90 /* Oakland.mov */; };
+		83CFA87B2D7F538E00854FB4 /* TransportControlsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83CFA87A2D7F538E00854FB4 /* TransportControlsView.swift */; };
+		83CFA87D2D7F817D00854FB4 /* MediaPlaybackModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83CFA87C2D7F817900854FB4 /* MediaPlaybackModel.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -28,6 +30,8 @@
 		835C5D062D77B668008C1BE6 /* Shaders.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = Shaders.metal; sourceTree = "<group>"; };
 		835C5D072D77B668008C1BE6 /* VideoRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoRenderer.swift; sourceTree = "<group>"; };
 		83B9C3E82D7E7F0800B43B90 /* Oakland.mov */ = {isa = PBXFileReference; lastKnownFileType = video.quicktime; path = Oakland.mov; sourceTree = "<group>"; };
+		83CFA87A2D7F538E00854FB4 /* TransportControlsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransportControlsView.swift; sourceTree = "<group>"; };
+		83CFA87C2D7F817900854FB4 /* MediaPlaybackModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaPlaybackModel.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -71,8 +75,10 @@
 				835C5CFF2D77B668008C1BE6 /* Resources */,
 				835C5D062D77B668008C1BE6 /* Shaders.metal */,
 				835C5D072D77B668008C1BE6 /* VideoRenderer.swift */,
+				83CFA87A2D7F538E00854FB4 /* TransportControlsView.swift */,
 				835C5D012D77B668008C1BE6 /* ContentView.swift */,
 				835C5D042D77B668008C1BE6 /* VideoApp.swift */,
+				83CFA87C2D7F817900854FB4 /* MediaPlaybackModel.swift */,
 				835C5D052D77B668008C1BE6 /* MetalView.swift */,
 				835C5D022D77B668008C1BE6 /* Math.swift */,
 				835C5D002D77B668008C1BE6 /* Assets.xcassets */,
@@ -158,9 +164,11 @@
 				835C5D122D77B668008C1BE6 /* ContentView.swift in Sources */,
 				835C5D132D77B668008C1BE6 /* Math.swift in Sources */,
 				835C5D142D77B668008C1BE6 /* VideoApp.swift in Sources */,
+				83CFA87D2D7F817D00854FB4 /* MediaPlaybackModel.swift in Sources */,
 				835C5D152D77B668008C1BE6 /* MetalView.swift in Sources */,
 				835C5D162D77B668008C1BE6 /* Shaders.metal in Sources */,
 				835C5D172D77B668008C1BE6 /* VideoRenderer.swift in Sources */,
+				83CFA87B2D7F538E00854FB4 /* TransportControlsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -219,12 +227,13 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 16.6;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MACOSX_DEPLOYMENT_TARGET = 13.5;
+				MACOSX_DEPLOYMENT_TARGET = 14.6;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				TVOS_DEPLOYMENT_TARGET = 16.6;
@@ -278,11 +287,12 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 16.6;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MACOSX_DEPLOYMENT_TARGET = 13.5;
+				MACOSX_DEPLOYMENT_TARGET = 14.6;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
+				SDKROOT = macosx;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				TVOS_DEPLOYMENT_TARGET = 16.6;
 				XROS_DEPLOYMENT_TARGET = 1.3;
@@ -298,7 +308,7 @@
 				CODE_SIGN_ENTITLEMENTS = MetalHDRVideo/MetalHDRVideo.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = RHRJ88BAB5;
+				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -336,7 +346,7 @@
 				CODE_SIGN_ENTITLEMENTS = MetalHDRVideo/MetalHDRVideo.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = RHRJ88BAB5;
+				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;

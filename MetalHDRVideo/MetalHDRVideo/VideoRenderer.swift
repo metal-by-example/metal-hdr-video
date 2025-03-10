@@ -11,20 +11,20 @@ enum TonemappingMode {
 
 class VideoRenderer : NSObject, RenderDelegate {
     let asset: AVAsset
+    let tonemappingMode: TonemappingMode = .auto
+
     private let device: MTLDevice
     private let commandQueue: MTLCommandQueue
     private let textureCache: CVMetalTextureCache
     private var renderPipelineState: MTLRenderPipelineState!
     private var view: MTKView?
     private var targetPixelFormat = MTLPixelFormat.invalid
-    private var player: AVPlayer?
     private var videoOutput: AVPlayerItemVideoOutput?
     private var textureMappingsInFlight: Set<CVMetalTexture> = []
     private var assetIsHDR: Bool = false
     private var contentSize: CGSize = .zero
     private var videoTransform: CGAffineTransform = .identity
     private var currentEDRHeadroom: CGFloat = 1.1
-    private let tonemappingMode: TonemappingMode = .auto
 
     init(url: URL) {
         self.asset = AVURLAsset(url: url)
@@ -40,19 +40,74 @@ class VideoRenderer : NSObject, RenderDelegate {
         self.textureCache = textureCache
 
         super.init()
+    }
 
-        NotificationCenter.default.addObserver(self,
-                                               selector: #selector(playerItemDidPlayToEnd),
-                                               name: .AVPlayerItemDidPlayToEndTime,
-                                               object: self.player?.currentItem)
+    func prepareToPlay(_ onReady: @escaping (AVPlayerItem) -> Void) {
+        guard let view = view else { return }
+        guard let metalLayer = view.layer as? CAMetalLayer else { return }
 
-        // This can be used to received updates when NSScreen's EDR headroom changes.
-        //#if os(macOS)
-        //NotificationCenter.default.addObserver(self,
-        //                                       selector: #selector(screenDidChange(_:)),
-        //                                       name: NSWindow.didChangeScreenNotification,
-        //                                       object: nil)
-        //#endif
+        reportMaxEDRHeadroom()
+
+        Task.init { @MainActor in
+            let videoTracks = try await asset.loadTracks(withMediaCharacteristic: .visual)
+            if videoTracks.isEmpty { return }
+
+            let hdrTracks = try await asset.loadTracks(withMediaCharacteristic: .containsHDRVideo)
+
+            self.assetIsHDR = !hdrTracks.isEmpty
+
+            let firstTrack = videoTracks[0]
+            self.contentSize = try await firstTrack.load(.naturalSize)
+            self.videoTransform = try await firstTrack.load(.preferredTransform)
+
+            var outputTransferFunction = AVVideoTransferFunction_Linear
+            if tonemappingMode == .auto {
+                let formatDescriptions = try await firstTrack.load(.formatDescriptions)
+                if let primaryFormatDescription = formatDescriptions.first {
+                    if let transferFunctionValue = primaryFormatDescription.extensions[.transferFunction] {
+                        let transferFunction = transferFunctionValue.propertyListRepresentation as! CFString
+                        if transferFunction == CMFormatDescription.Extensions.Value.TransferFunction.itu_R_2020.rawValue {
+                            // ITU_R_2020 requires special handling because there is no matching AVFoundation value for it.
+                            // All of the other relevant transfer functions are spelled identically between CM and AV.
+                            outputTransferFunction = AVVideoTransferFunction_ITU_R_709_2
+                        } else {
+                            outputTransferFunction = transferFunction as String
+                        }
+                        print("Selected output transfer function: \(outputTransferFunction)")
+                    }
+                }
+                if formatDescriptions.count > 1 {
+                    print("Not handling multiple video format descriptions")
+                }
+            }
+
+            self.setInitialEDRMetadata()
+
+            self.targetPixelFormat = .rgba16Float
+
+            metalLayer.wantsExtendedDynamicRangeContent = true
+            metalLayer.colorspace = CGColorSpace(name: CGColorSpace.extendedLinearITUR_2020)
+            metalLayer.pixelFormat = targetPixelFormat
+
+            let videoColorProperties = [
+                AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_2020,
+                AVVideoTransferFunctionKey: outputTransferFunction,
+                AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_2020
+            ]
+            let outputVideoSettings: [String : Any] = [
+                AVVideoAllowWideColorKey: true,
+                AVVideoColorPropertiesKey: videoColorProperties,
+                kCVPixelBufferPixelFormatTypeKey as String: NSNumber(value: kCVPixelFormatType_64RGBAHalf)
+            ]
+            self.videoOutput = AVPlayerItemVideoOutput(outputSettings: outputVideoSettings)
+
+            self.renderPipelineState = makeRenderPipeline(outputTransferFunction)
+
+            let playerItem = AVPlayerItem(asset: asset)
+            playerItem.add(videoOutput!)
+
+            onReady(playerItem)
+        }
     }
 
     func configure(view: MTKView) {
@@ -63,86 +118,6 @@ class VideoRenderer : NSObject, RenderDelegate {
     }
 
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
-    }
-
-    private func displayTransform(frameSize: CGSize,
-                                  contentTransform: CGAffineTransform,
-                                  displaySize: CGSize) -> simd_float4x4
-    {
-        // The natural frame of a video track is the bounding rect of the image containing a frame's contents.
-        let naturalFrame = CGRectMake(0, 0, frameSize.width, frameSize.height)
-        // The video frame is the bounding rect of a frame after transformation by the track's preferred transform.
-        let videoFrame = CGRectApplyAffineTransform(naturalFrame, contentTransform)
-        // Vertices in the vertex shader are the corners of a canonical (unit) square; this transform reshapes
-        // that square so its size matches the natural frame of the video.
-        let naturalFromCanonicalTransform = CGAffineTransformMakeScale(frameSize.width, frameSize.height)
-        // Concatenating the preferred transform of the video with the natural-from-canonical transform produces
-        // a transform that scales, rotates, and translates the unit square into the final video frame size and orientation.
-        let videoFromCanonicalTransform = CGAffineTransformConcat(naturalFromCanonicalTransform, contentTransform)
-        let videoFrameMatrix = simd_float4x4(videoFromCanonicalTransform)
-        // To display the video in an aspect-correct manner, we transform the bounds of the video frame
-        // so that they fit tightly within the bounding rect of the surface to be presented.
-        let displayBounds = CGRect(x: 0, y: 0, width: displaySize.width, height: displaySize.height)
-        let modelMatrix = transformForAspectFitting(videoFrame, in: displayBounds)
-        // The projection matrix takes us from coordinates expressed relative to the presentation surface's bounds
-        // into clip space.
-        let projectionMatrix = float4x4.orthographicProjection(left: 0,
-                                                               top: 0,
-                                                               right: Float(displayBounds.width),
-                                                               bottom: Float(displayBounds.height),
-                                                               near: -1,
-                                                               far: 1)
-        // The final model–projection matrix combines the effects of the above transforms.
-        let videoTransform = projectionMatrix * modelMatrix * videoFrameMatrix
-        return videoTransform
-    }
-
-    private func reportMaxEDRHeadroom() {
-        var maxHeadroom: CGFloat = 1.0
-#if os(macOS)
-        maxHeadroom = NSScreen.main?.maximumPotentialExtendedDynamicRangeColorComponentValue ?? 1.0
-#elseif os(iOS)
-        maxHeadroom = UIScreen.main.potentialEDRHeadroom
-#endif
-        if maxHeadroom > 1.0 {
-            print("The main display supports EDR with a maximum headroom of \(maxHeadroom).")
-        } else {
-            print("The main display does NOT support EDR.")
-        }
-    }
-
-    private func pollCurrentEDRHeadroom() {
-#if os (macOS)
-        let screen = self.view?.window?.screen ?? NSScreen.main
-        let headroom = screen?.maximumExtendedDynamicRangeColorComponentValue ?? 1.0
-#elseif os(iOS)
-        let screen = self.view?.window?.screen ?? UIScreen.main
-        let headroom = screen.currentEDRHeadroom
-#else
-        let headroom: CGFloat = 1.0
-#endif
-        if headroom != currentEDRHeadroom {
-            print("EDR headrooom changed to \(headroom)")
-            currentEDRHeadroom = headroom
-        }
-    }
-
-    private func setInitialEDRMetadata() {
-        guard let metalLayer = view?.layer as? CAMetalLayer else {
-            print("Tried to set initial EDR metadata before view was configured")
-            return
-        }
-
-        if (tonemappingMode == .edr) && assetIsHDR && metalLayer.edrMetadata == nil {
-            if CAEDRMetadata.isAvailable {
-                metalLayer.edrMetadata = CAEDRMetadata.hdr10(minLuminance: 0.005,
-                                                             maxLuminance: 1000.0,
-                                                             opticalOutputScale: 100.0)
-                print("Set default EDR metadata for HDR asset")
-            } else {
-                print("EDR tonemapping is not available; HDR content will likely clip")
-            }
-        }
     }
 
     private var logOnce: Bool = true
@@ -161,7 +136,7 @@ class VideoRenderer : NSObject, RenderDelegate {
         let textureHeight = CVPixelBufferGetHeight(pixelBuffer)
 
         var cvTexture: CVMetalTexture?
-        let _ = CVMetalTextureCacheCreateTextureFromImage(nil,
+        let _ = CVMetalTextureCacheCreateTextureFromImage(kCFAllocatorDefault,
                                                           textureCache,
                                                           pixelBuffer,
                                                           nil,
@@ -266,82 +241,83 @@ class VideoRenderer : NSObject, RenderDelegate {
         }
     }
 
-    func play() {
-        guard let view = view else { return }
-        guard let metalLayer = view.layer as? CAMetalLayer else { return }
+    private func displayTransform(frameSize: CGSize,
+                                  contentTransform: CGAffineTransform,
+                                  displaySize: CGSize) -> simd_float4x4
+    {
+        // The natural frame of a video track is the bounding rect of the image containing a frame's contents.
+        let naturalFrame = CGRectMake(0, 0, frameSize.width, frameSize.height)
+        // The video frame is the bounding rect of a frame after transformation by the track's preferred transform.
+        let videoFrame = CGRectApplyAffineTransform(naturalFrame, contentTransform)
+        // Vertices in the vertex shader are the corners of a canonical (unit) square; this transform reshapes
+        // that square so its size matches the natural frame of the video.
+        let naturalFromCanonicalTransform = CGAffineTransformMakeScale(frameSize.width, frameSize.height)
+        // Concatenating the preferred transform of the video with the natural-from-canonical transform produces
+        // a transform that scales, rotates, and translates the unit square into the final video frame size and orientation.
+        let videoFromCanonicalTransform = CGAffineTransformConcat(naturalFromCanonicalTransform, contentTransform)
+        let videoFrameMatrix = simd_float4x4(videoFromCanonicalTransform)
+        // To display the video in an aspect-correct manner, we transform the bounds of the video frame
+        // so that they fit tightly within the bounding rect of the surface to be presented.
+        let displayBounds = CGRect(x: 0, y: 0, width: displaySize.width, height: displaySize.height)
+        let modelMatrix = transformForAspectFitting(videoFrame, in: displayBounds)
+        // The projection matrix takes us from coordinates expressed relative to the presentation surface's bounds
+        // into clip space.
+        let projectionMatrix = float4x4.orthographicProjection(left: 0,
+                                                               top: 0,
+                                                               right: Float(displayBounds.width),
+                                                               bottom: Float(displayBounds.height),
+                                                               near: -1,
+                                                               far: 1)
+        // The final model–projection matrix combines the effects of the above transforms.
+        let videoTransform = projectionMatrix * modelMatrix * videoFrameMatrix
+        return videoTransform
+    }
 
-        reportMaxEDRHeadroom()
-
-        Task.init { @MainActor in
-            let videoTracks = try await self.asset.loadTracks(withMediaCharacteristic: .visual)
-            if videoTracks.isEmpty { return }
-
-            let hdrTracks = try await self.asset.loadTracks(withMediaCharacteristic: .containsHDRVideo)
-
-            self.assetIsHDR = !hdrTracks.isEmpty
-
-            let firstTrack = videoTracks[0]
-            self.contentSize = try await firstTrack.load(.naturalSize)
-            self.videoTransform = try await firstTrack.load(.preferredTransform)
-
-            var outputTransferFunction = AVVideoTransferFunction_Linear
-            if tonemappingMode == .auto {
-                let formatDescriptions = try await firstTrack.load(.formatDescriptions)
-                if let primaryFormatDescription = formatDescriptions.first {
-                    if let transferFunctionValue = primaryFormatDescription.extensions[.transferFunction] {
-                        let transferFunction = transferFunctionValue.propertyListRepresentation as! CFString
-                        if transferFunction == CMFormatDescription.Extensions.Value.TransferFunction.itu_R_2020.rawValue {
-                            // ITU_R_2020 requires special handling because there is no matching AVFoundation value for it.
-                            // All of the other relevant transfer functions are spelled identically between CM and AV.
-                            outputTransferFunction = AVVideoTransferFunction_ITU_R_709_2
-                        } else {
-                            outputTransferFunction = transferFunction as String
-                        }
-                        print("Selected output transfer function: \(outputTransferFunction)")
-                    }
-                }
-                if formatDescriptions.count > 1 {
-                    print("Not handling multiple video format descriptions")
-                }
-            }
-
-            self.setInitialEDRMetadata()
-
-            self.targetPixelFormat = .rgba16Float
-
-            metalLayer.wantsExtendedDynamicRangeContent = true
-            metalLayer.colorspace = CGColorSpace(name: CGColorSpace.extendedLinearITUR_2020)
-            metalLayer.pixelFormat = targetPixelFormat
-
-            let videoColorProperties = [
-                AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_2020,
-                AVVideoTransferFunctionKey: outputTransferFunction,
-                AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_2020
-            ]
-            let outputVideoSettings: [String : Any] = [
-                AVVideoAllowWideColorKey: true,
-                AVVideoColorPropertiesKey: videoColorProperties,
-                kCVPixelBufferPixelFormatTypeKey as String: NSNumber(value: kCVPixelFormatType_64RGBAHalf)
-            ]
-            self.videoOutput = AVPlayerItemVideoOutput(outputSettings: outputVideoSettings)
-
-            self.renderPipelineState = makeRenderPipeline(outputTransferFunction)
-
-            let playerItem = AVPlayerItem(asset: asset)
-            playerItem.add(videoOutput!)
-
-            self.player = AVPlayer(playerItem: playerItem)
-            self.player?.play()
+    private func reportMaxEDRHeadroom() {
+        var maxHeadroom: CGFloat = 1.0
+#if os(macOS)
+        maxHeadroom = NSScreen.main?.maximumPotentialExtendedDynamicRangeColorComponentValue ?? 1.0
+#elseif os(iOS)
+        maxHeadroom = UIScreen.main.potentialEDRHeadroom
+#endif
+        if maxHeadroom > 1.0 {
+            print("The main display supports EDR with a maximum headroom of \(maxHeadroom).")
+        } else {
+            print("The main display does NOT support EDR.")
         }
     }
 
-    func stop() {
-        self.player?.pause()
+    private func pollCurrentEDRHeadroom() {
+#if os (macOS)
+        let screen = self.view?.window?.screen ?? NSScreen.main
+        let headroom = screen?.maximumExtendedDynamicRangeColorComponentValue ?? 1.0
+#elseif os(iOS)
+        let screen = self.view?.window?.screen ?? UIScreen.main
+        let headroom = screen.currentEDRHeadroom
+#else
+        let headroom: CGFloat = 1.0
+#endif
+        if headroom != currentEDRHeadroom {
+            print("EDR headrooom changed to \(headroom)")
+            currentEDRHeadroom = headroom
+        }
     }
 
-    @objc
-    func playerItemDidPlayToEnd() {
-        player?.seek(to: CMTime.zero)
-        player?.play()
+    private func setInitialEDRMetadata() {
+        guard let metalLayer = view?.layer as? CAMetalLayer else {
+            print("Tried to set initial EDR metadata before view was configured")
+            return
+        }
+
+        if (tonemappingMode == .edr) && assetIsHDR && metalLayer.edrMetadata == nil {
+            if CAEDRMetadata.isAvailable {
+                metalLayer.edrMetadata = CAEDRMetadata.hdr10(minLuminance: 0.005,
+                                                             maxLuminance: 1000.0,
+                                                             opticalOutputScale: 100.0)
+                print("Set default EDR metadata for HDR asset")
+            } else {
+                print("EDR tonemapping is not available; HDR content will likely clip")
+            }
+        }
     }
 }
